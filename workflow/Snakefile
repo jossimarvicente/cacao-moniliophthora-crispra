@@ -1,0 +1,87 @@
+# ============================================================
+# Snakefile — Pipeline RNA-seq cacao x Moniliophthora roreri
+# Sección 2.4 — Expresión diferencial propia
+# Autor: Jossimar Vicente
+# ============================================================
+
+# --- Muestras del estudio Meinhardt 2014 ---
+MUESTRAS = ["SRR1034656"]  # 30 DPI (días post-infección)
+                            # Agregar SRR de 60 DPI cuando lo descarguemos
+
+# --- Rutas principales ---
+RAW     = "data/raw/meinhardt2014"
+GENOME  = "data/genome"
+PROC    = "data/processed"
+RESULTS = "results"
+LOGS    = "logs"
+
+# ============================================================
+# Regla final: qué archivos quiero tener al final de todo
+# Snakemake trabaja hacia atrás desde aquí
+# ============================================================
+rule all:
+    input:
+        expand(PROC + "/fastq/{muestra}_1.fastq.gz", muestra=MUESTRAS),
+        expand(PROC + "/fastq/{muestra}_2.fastq.gz", muestra=MUESTRAS),
+        expand(PROC + "/fastp/{muestra}_1_clean.fastq.gz", muestra=MUESTRAS),
+        expand(PROC + "/fastp/{muestra}_2_clean.fastq.gz", muestra=MUESTRAS),
+        expand(PROC + "/fastp/{muestra}_report.html", muestra=MUESTRAS)
+
+# ============================================================
+# Regla 1: convertir el archivo SRA descargado a FASTQ
+# FASTQ = formato de texto que guarda las lecturas crudas
+# con su secuencia y calidad base a base
+# ============================================================
+rule sra_a_fastq:
+    input:
+        RAW + "/{muestra}/{muestra}.sra"
+    output:
+        r1 = PROC + "/fastq/{muestra}_1.fastq.gz",
+        r2 = PROC + "/fastq/{muestra}_2.fastq.gz"
+    log:
+        LOGS + "/fastq-dump/{muestra}.log"
+    threads: 4
+    shell:
+        """
+        mkdir -p {PROC}/fastq
+        fasterq-dump {input} \
+            --outdir {PROC}/fastq \
+            --threads {threads} \
+            --split-files \
+            --progress \
+            2> {log}
+        gzip {PROC}/fastq/{wildcards.muestra}_1.fastq
+        gzip {PROC}/fastq/{wildcards.muestra}_2.fastq
+        """
+
+# ============================================================
+# Regla 2: limpiar lecturas con fastp
+# fastp quita adaptadores (secuencias artificiales del
+# protocolo de secuenciación) y bases de baja calidad
+# ============================================================
+rule fastp_limpiar:
+    input:
+        r1 = PROC + "/fastq/{muestra}_1.fastq.gz",
+        r2 = PROC + "/fastq/{muestra}_2.fastq.gz"
+    output:
+        r1  = PROC + "/fastp/{muestra}_1_clean.fastq.gz",
+        r2  = PROC + "/fastp/{muestra}_2_clean.fastq.gz",
+        html = PROC + "/fastp/{muestra}_report.html",
+        json = PROC + "/fastp/{muestra}_report.json"
+    log:
+        LOGS + "/fastp/{muestra}.log"
+    threads: 4
+    shell:
+        """
+        mkdir -p {PROC}/fastp
+        fastp \
+            --in1 {input.r1} \
+            --in2 {input.r2} \
+            --out1 {output.r1} \
+            --out2 {output.r2} \
+            --html {output.html} \
+            --json {output.json} \
+            --thread {threads} \
+            --detect_adapter_for_pe \
+            2> {log}
+        """
