@@ -1,0 +1,10 @@
+# Datos crudos — demasiado grandes para Git
+data/genome/
+data/raw/
+data/processed/
+
+# Archivos temporales de Snakemake
+.snakemake/
+
+# Logs grandes
+logs/
