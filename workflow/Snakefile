@@ -4,33 +4,31 @@
 # Autor: Jossimar Vicente
 # ============================================================
 
-# --- Muestras del estudio Meinhardt 2014 ---
-MUESTRAS = ["SRR1034656"]  # 30 DPI (días post-infección)
-                            # Agregar SRR de 60 DPI cuando lo descarguemos
+MUESTRAS = ["SRR1034656"]
 
-# --- Rutas principales ---
 RAW     = "data/raw/meinhardt2014"
 GENOME  = "data/genome"
 PROC    = "data/processed"
-RESULTS = "results"
 LOGS    = "logs"
 
+GENOME_FA  = GENOME + "/Tcacao_523_v2.0.fa"
+GENOME_IDX = GENOME + "/Tcacao_523_v2.0_index"
+GENOME_GFF = GENOME + "/Tcacao_523_v2.1.gene.gff3"
+
 # ============================================================
-# Regla final: qué archivos quiero tener al final de todo
-# Snakemake trabaja hacia atrás desde aquí
+# Regla final: archivos que queremos al terminar todo
 # ============================================================
 rule all:
     input:
-        expand(PROC + "/fastq/{muestra}_1.fastq.gz", muestra=MUESTRAS),
-        expand(PROC + "/fastq/{muestra}_2.fastq.gz", muestra=MUESTRAS),
         expand(PROC + "/fastp/{muestra}_1_clean.fastq.gz", muestra=MUESTRAS),
         expand(PROC + "/fastp/{muestra}_2_clean.fastq.gz", muestra=MUESTRAS),
-        expand(PROC + "/fastp/{muestra}_report.html", muestra=MUESTRAS)
+        expand(PROC + "/fastp/{muestra}_report.html",      muestra=MUESTRAS),
+        expand(PROC + "/hisat2/{muestra}.bam",             muestra=MUESTRAS),
+        expand(PROC + "/hisat2/{muestra}.bam.bai",         muestra=MUESTRAS),
+        expand(PROC + "/counts/{muestra}_counts.txt",      muestra=MUESTRAS)
 
 # ============================================================
-# Regla 1: convertir el archivo SRA descargado a FASTQ
-# FASTQ = formato de texto que guarda las lecturas crudas
-# con su secuencia y calidad base a base
+# Regla 1: convertir SRA a FASTQ
 # ============================================================
 rule sra_a_fastq:
     input:
@@ -56,16 +54,14 @@ rule sra_a_fastq:
 
 # ============================================================
 # Regla 2: limpiar lecturas con fastp
-# fastp quita adaptadores (secuencias artificiales del
-# protocolo de secuenciación) y bases de baja calidad
 # ============================================================
 rule fastp_limpiar:
     input:
         r1 = PROC + "/fastq/{muestra}_1.fastq.gz",
         r2 = PROC + "/fastq/{muestra}_2.fastq.gz"
     output:
-        r1  = PROC + "/fastp/{muestra}_1_clean.fastq.gz",
-        r2  = PROC + "/fastp/{muestra}_2_clean.fastq.gz",
+        r1   = PROC + "/fastp/{muestra}_1_clean.fastq.gz",
+        r2   = PROC + "/fastp/{muestra}_2_clean.fastq.gz",
         html = PROC + "/fastp/{muestra}_report.html",
         json = PROC + "/fastp/{muestra}_report.json"
     log:
@@ -83,5 +79,62 @@ rule fastp_limpiar:
             --json {output.json} \
             --thread {threads} \
             --detect_adapter_for_pe \
+            2> {log}
+        """
+
+# ============================================================
+# Regla 3: alinear lecturas al genoma con HISAT2
+# BAM = formato binario comprimido de alineamiento
+# ============================================================
+rule hisat2_alinear:
+    input:
+        r1  = PROC + "/fastp/{muestra}_1_clean.fastq.gz",
+        r2  = PROC + "/fastp/{muestra}_2_clean.fastq.gz",
+        idx = GENOME_IDX + ".1.ht2"
+    output:
+        bam = PROC + "/hisat2/{muestra}.bam",
+        bai = PROC + "/hisat2/{muestra}.bam.bai"
+    log:
+        LOGS + "/hisat2/{muestra}.log"
+    threads: 4
+    shell:
+        """
+        mkdir -p {PROC}/hisat2
+        hisat2 \
+            -x {GENOME_IDX} \
+            -1 {input.r1} \
+            -2 {input.r2} \
+            --threads {threads} \
+            --dta \
+            2> {log} | \
+        samtools sort -@ {threads} -o {output.bam}
+        samtools index {output.bam}
+        """
+
+# ============================================================
+# Regla 4: contar lecturas por gen con featureCounts
+# Produce tabla gen -> número de lecturas
+# featureCounts es más rápido que htseq-count
+# ============================================================
+rule contar_lecturas:
+    input:
+        bam = PROC + "/hisat2/{muestra}.bam",
+        gff = GENOME_GFF
+    output:
+        PROC + "/counts/{muestra}_counts.txt"
+    log:
+        LOGS + "/featureCounts/{muestra}.log"
+    threads: 4
+    shell:
+        """
+        mkdir -p {PROC}/counts
+        featureCounts \
+            -T {threads} \
+            -p \
+            -t gene \
+            -g Name \
+            -a {input.gff} \
+            -o {output} \
+            {input.bam} \
             2> {log}
         """
